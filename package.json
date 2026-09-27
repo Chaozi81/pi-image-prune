@@ -1,0 +1,10 @@
+{
+  "name": "pi-image-prune",
+  "version": "0.1.0",
+  "description": "pi 扩展: 请求级图片剪枝 —— 单次请求图片超过上限时, 最旧的图片落盘并以路径占位",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "pi": { "extensions": ["./extensions/index.ts"] },
+  "scripts": { "test": "node --test tests/*.test.ts" }
+}
