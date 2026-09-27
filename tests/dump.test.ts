@@ -5,6 +5,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { hashImage, extForMime, dumpPath, createDumper } from "../lib/dump.ts";
 
+/** 本地日期 YYYY-MM-DD(与 dumpPath 口径一致, 不能用 UTC) */
+function localDate(d = new Date()): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${dd}`;
+}
+
 test("hashImage 稳定且为 12 位十六进制", () => {
   const a = hashImage("AAAA");
   assert.equal(a, hashImage("AAAA"));
@@ -41,7 +49,7 @@ test("dump 写盘 + 同一内容只写一份", () => {
   assert.ok("path" in r1);
   assert.ok("path" in r2);
   assert.equal((r1 as { path: string }).path, (r2 as { path: string }).path);
-  const files = readdirSync(join(tmp, new Date().toISOString().slice(0, 10)), { recursive: true })
+  const files = readdirSync(join(tmp, localDate()), { recursive: true })
     .filter((f) => typeof f === "string" && !f.startsWith(".")) as string[];
   assert.equal(files.length, 1);
   rmSync(tmp, { recursive: true, force: true });
@@ -52,7 +60,7 @@ test("dump 文件权限 0600、目录 0700", () => {
   const dumper = createDumper({ dumpDir: tmp });
   const r = dumper.dump({ hash: hashImage("B"), data: "B", mimeType: "image/png" });
   assert.ok("path" in r);
-  const dir = join(tmp, new Date().toISOString().slice(0, 10));
+  const dir = join(tmp, localDate());
   assert.equal(statSync(dir).mode & 0o777, 0o700);
   assert.equal(statSync((r as { path: string }).path).mode & 0o777, 0o600);
   rmSync(tmp, { recursive: true, force: true });
@@ -62,7 +70,7 @@ test("dump 不残留临时文件", () => {
   const tmp = mkdtempSync(join(tmpdir(), "ip-dump-"));
   const dumper = createDumper({ dumpDir: tmp });
   dumper.dump({ hash: hashImage("C"), data: "C", mimeType: "image/png" });
-  const dir = join(tmp, new Date().toISOString().slice(0, 10));
+  const dir = join(tmp, localDate());
   const all = readdirSync(dir, { recursive: true }) as string[];
   assert.ok(!all.some((f) => f.startsWith(".tmp-")));
   rmSync(tmp, { recursive: true, force: true });
