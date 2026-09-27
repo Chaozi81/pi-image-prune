@@ -1,0 +1,22 @@
+# Normalize line endings to LF in the repository.
+# Prevents CRLF from breaking shell scripts (shebang `#!/usr/bin/env bash\r` fails on Linux/macOS/WSL).
+* text=auto eol=lf
+
+# Windows-only scripts must keep CRLF to run under cmd.exe.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Explicit binary guard (never convert).
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.gz binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
