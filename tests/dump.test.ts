@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, statSync, readdirSync, writeFileSync, mkdirSync, readFileSync, utimesSync } from "node:fs";
+import { mkdtempSync, rmSync, statSync, readdirSync, writeFileSync, mkdirSync, readFileSync, utimesSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { hashImage, extForMime, dumpPath, createDumper } from "../lib/dump.ts";
@@ -18,6 +18,11 @@ test("hashImage 稳定且为 12 位十六进制", () => {
   assert.equal(a, hashImage("AAAA"));
   assert.match(a, /^[0-9a-f]{12}$/);
   assert.notEqual(a, hashImage("BBBB"));
+});
+
+test("hashImage 跨进程稳定(硬编码已知 sha256 前 12 位)", () => {
+  assert.equal(hashImage("AAAA"), "63c1dd951ffe");
+  assert.equal(hashImage(""), "e3b0c44298fc");
 });
 
 test("hashImage 对空/缺失输入不抛", () => {
@@ -111,6 +116,29 @@ test("pruneOld retentionDays=0 什么都不删", () => {
   assert.equal(res.removed.length, 0);
   assert.ok(statSync(join(tmp, "2026-09-20")).isDirectory());
   rmSync(tmp, { recursive: true, force: true });
+});
+
+test("pruneOld 删不掉时不抛, 记入 errors", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "ip-dump-"));
+  const dateDir = join(tmp, "2026-09-20");
+  mkdirSync(dateDir, { recursive: true });
+  utimesSync(dateDir, new Date(2026, 8, 20), new Date(2026, 8, 20));
+  const now = new Date(2026, 8, 27);
+  // 父目录不可写 → 删除子目录失败(EACCES); 非 root 下可复现
+  chmodSync(tmp, 0o500);
+  try {
+    const dumper = createDumper({ dumpDir: tmp, now: () => now });
+    let res: { removed: string[]; errors: string[] } | undefined;
+    assert.doesNotThrow(() => {
+      res = dumper.pruneOld(3);
+    });
+    assert.equal(res!.removed.length, 0);
+    assert.ok(res!.errors.length >= 1);
+    assert.ok(statSync(dateDir).isDirectory());
+  } finally {
+    chmodSync(tmp, 0o700);
+    rmSync(tmp, { recursive: true, force: true });
+  }
 });
 
 test("log 追加 JSONL, 每行可解析", () => {
