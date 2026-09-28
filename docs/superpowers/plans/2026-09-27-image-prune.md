@@ -2,6 +2,29 @@
 
 > **面向 AI 代理的工作者:** 逐任务实现此计划。步骤用复选框(`- [ ]`)跟踪进度;每个任务都以"先写失败测试 → 跑 → 写实现 → 跑 → commit"的循环收尾。设计真源: `docs/superpowers/specs/2026-09-27-image-prune-design.md`(下称"设计 §N")。
 
+---
+
+> ## ⚠️ 作废注记(实现前必读): 任务 4 的剪枝算法已被取代, **不要照它实现**
+>
+> 本文件是当时的过程记录, **其"任务 4"描述的剪枝算法已废弃**。任务 4 的算法原文含
+> "每条消息各自保底 `maxImages` 张"的下限约束, 该约束已被判定为缺陷
+> (两条消息各 12 张、上限 10 时, 剪后仍留 20 张 > 上限), 已由后续 commit 取代:
+>
+> - `bb77603` fix(prune): 剪枝改为**全局剪最旧的 `excess = refs.length - maxImages` 张, 硬保证剪后图片数 === `maxImages`**;
+> - `4a0f64e` feat(prune): 新增 `maxImageBytes` 体积预算(默认 24 MiB, `0` = 关)。
+>
+> 被取代的具体点: 原文"每条消息各自保底 `maxImages` 张"这一约束**已删除**;
+> 现为"**全局剪最旧的 excess 张, 硬保证剪后 === `maxImages`**", 并**新增了体积预算规则**
+> (单条消息自身超限时, 该条自然只保留最后 `maxImages` 张, 不再是"保底")。
+>
+> **真源(一切以它们为准):**
+> - 设计文档: `docs/superpowers/specs/2026-09-27-image-prune-design.md`(已订正: §1 前提、§4.2 规则 3/4/6、新增 §4.2.1 体积预算规则)
+> - 现有代码: `lib/prune.ts` + `tests/prune.test.ts`(68 用例)
+>
+> 本文档其余历史内容保有当时原貌, 仅供追溯, 不作为实现依据。
+
+---
+
 **目标:** 实现 pi 扩展 `pi-image-prune`: 单次请求内图片数超过可配置上限(默认 10)时, 把最旧的图片落盘到 `~/.pi/agent/image-prune/YYYY-MM-DD/<sha12>.<ext>`, 并在原位置原地替换为带绝对路径的占位 text 块, 使请求能正常发出。只改本次请求, 存储层不变。全局生效(manager + 子 agent)。
 
 **架构:** 纯逻辑与 I/O 分离。`lib/scan.ts`(定位图片块)、`lib/prune.ts`(决策 + 造新 messages, 落盘通过注入 callback)、`lib/config.ts`(配置解析) 都是纯函数, 可注入依赖、零 fs 零 pi;`lib/dump.ts` 是唯一 I/O 模块(哈希命名 + 原子写 + 保留清理 + prune.log);`extensions/index.ts` 只做事件接线(`session_start` / `context` / `before_provider_request` / `/image-prune` 命令)与限流提示。
@@ -218,6 +241,8 @@ export function scanImages(messages: readonly unknown[]): ImageRef[];
 ---
 
 ## 任务 4: `lib/prune.ts`(核心)
+
+> ⚠️ **本算法(含下方"各自保底"约束)已被 `bb77603` 取代(`4a0f64e` 又新增体积预算), 不要照下方旧算法实现** —— 见文首注记。现行为"全局剪最旧的 excess 张, 硬保证剪后 === `maxImages`"; 真源: 设计文档 + `lib/prune.ts` + `tests/prune.test.ts`。
 
 **接口契约:**
 
