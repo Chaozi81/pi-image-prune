@@ -42,33 +42,19 @@ export function pruneImages(
   const refs = scanImages(messages);
   if (refs.length <= deps.maxImages) return undefined;
 
-  // 每条消息的图片数
+  // 每条消息的图片数 (仅用于提示, 不再影响剪枝结果)
   const countByMsg = new Map<number, number>();
   for (const ref of refs) {
     countByMsg.set(ref.msgIndex, (countByMsg.get(ref.msgIndex) ?? 0) + 1);
   }
 
-  // 每条消息最多可剪的张数:
-  //   消息自身超过 maxImages → 只保留该消息内最后 maxImages 张(最多剪 count - max)
-  //   消息自身未超过 maxImages → 该消息全部图片都可被全局规则剪掉
-  const maxPruneByMsg = new Map<number, number>();
-  for (const [mi, count] of countByMsg) {
-    maxPruneByMsg.set(mi, count > deps.maxImages ? count - deps.maxImages : count);
-  }
-
-  // 从全局最旧的开始剪, 直到剪够 (总数 - maxImages) 张; 受每条消息上限约束
-  let excess = refs.length - deps.maxImages;
+  // 全局剪最旧的 (总数 - maxImages) 张 —— 硬保证剪后图片数 === maxImages。
+  // 单条消息自身超限时, 该条自然只保留最后 maxImages 张; 多条同时超限时优先保最新。
+  const excess = refs.length - deps.maxImages;
   const prunedKeys = new Set<string>();
-  const prunedCountByMsg = new Map<number, number>();
-  for (const ref of refs) {
-    if (excess <= 0) break;
-    const done = prunedCountByMsg.get(ref.msgIndex) ?? 0;
-    const cap = maxPruneByMsg.get(ref.msgIndex) ?? 0;
-    if (done < cap) {
-      prunedKeys.add(`${ref.msgIndex}:${ref.blockIndex}`);
-      prunedCountByMsg.set(ref.msgIndex, done + 1);
-      excess--;
-    }
+  for (let i = 0; i < excess; i++) {
+    const ref = refs[i];
+    prunedKeys.add(`${ref.msgIndex}:${ref.blockIndex}`);
   }
 
   const overLimitInSingleMessage = [...countByMsg.values()].some(

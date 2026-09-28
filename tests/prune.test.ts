@@ -198,7 +198,7 @@ test("dump 只对被剪的图调用", () => {
   assert.ok(calls.includes(hashImage("b")));
 });
 
-test("单条超上限 + 其他消息也超 → 各自保留最后 N 张", () => {
+test("多条消息同时超上限 → 仍然全局剪最旧, 剪后总数 === maxImages", () => {
   const calls: string[] = [];
   const msgs = [
     user([img("a"), img("b"), img("c")]), // 3 张, max=2
@@ -208,17 +208,87 @@ test("单条超上限 + 其他消息也超 → 各自保留最后 N 张", () => 
   assert.ok(res);
   assert.equal(res!.totalImages, 6);
   assert.equal(res!.overLimitInSingleMessage, true);
-  // 每条剪 1 张, 共剪 2 张(但全局 6 张, max=2, 应该剪 4 张...)
-  // 等等, 按算法: 每条最多剪 count-max = 1 张
-  // 全局 excess = 4, 但每条只能剪 1 张, 总共只能剪 2 张
-  // 所以保留 4 张
-  assert.equal(res!.pruned.length, 2);
+  // 全局 6 张, max=2 → 剪最旧 4 张 (a,b,c,d), 保留 e,f (硬保证 <= maxImages)
+  assert.equal(res!.pruned.length, 4);
   const c0 = (res!.messages[0] as Record<string, unknown[]>).content;
   const c1 = (res!.messages[1] as Record<string, unknown[]>).content;
   assert.equal((c0[0] as Record<string, string>).type, "text"); // a pruned
-  assert.equal((c0[1] as Record<string, string>).type, "image"); // b kept
-  assert.equal((c0[2] as Record<string, string>).type, "image"); // c kept
+  assert.equal((c0[1] as Record<string, string>).type, "text"); // b pruned
+  assert.equal((c0[2] as Record<string, string>).type, "text"); // c pruned
   assert.equal((c1[0] as Record<string, string>).type, "text"); // d pruned
   assert.equal((c1[1] as Record<string, string>).type, "image"); // e kept
   assert.equal((c1[2] as Record<string, string>).type, "image"); // f kept
+});
+
+/** 结果 messages 里剩余的图片块数 */
+function countResultImages(messages: readonly unknown[]): number {
+  let n = 0;
+  for (const msg of messages) {
+    const content = (msg as Record<string, unknown>).content;
+    if (!Array.isArray(content)) continue;
+    for (const block of content) {
+      if (
+        block &&
+        typeof block === "object" &&
+        (block as Record<string, unknown>).type === "image"
+      ) {
+        n++;
+      }
+    }
+  }
+  return n;
+}
+
+// ---- 回归: 修优先级缺陷 (旧实现每条消息各自保底, 剪后总数仍 > maxImages) ----
+
+test("REGRESSION 两条消息各 12 张(上限 10) → 剪后恰好 10 张, pruned 14", () => {
+  const calls: string[] = [];
+  const msgs = [
+    user(Array.from({ length: 12 }, (_, i) => img(`a${i}`))),
+    user(Array.from({ length: 12 }, (_, i) => img(`b${i}`))),
+  ];
+  const res = pruneImages(msgs, { maxImages: 10, dump: fakeDump(calls) });
+  assert.ok(res);
+  assert.equal(res!.totalImages, 24);
+  // 硬保证: 剪后图片数 === maxImages (旧实现是 20)
+  assert.equal(countResultImages(res!.messages), 10);
+  assert.equal(res!.pruned.length, 14);
+  // 剪掉的正是全局最旧的 14 张 (msg0 全部 12 张 + msg1 最旧 2 张)
+  assert.equal(res!.pruned[0].msgIndex, 0);
+  assert.equal(res!.pruned[13].msgIndex, 1);
+  assert.equal(res!.pruned[13].blockIndex, 1);
+  // 两条消息的块数不变
+  assert.equal((res!.messages[0] as Record<string, unknown[]>).content.length, 12);
+  assert.equal((res!.messages[1] as Record<string, unknown[]>).content.length, 12);
+});
+
+// ---- 语义变更: 一条 12 张 + 后面 1 张新的, 保留最新 10 张 ----
+
+test("语义变更: 一条 12 张 + 后面 1 张新的(上限 10) → 保留最新 10 张(前一条最后 9 张 + 新的 1 张)", () => {
+  const calls: string[] = [];
+  const msgs = [
+    user(Array.from({ length: 12 }, (_, i) => img(`old${i}`))),
+    user([img("newest")]),
+  ];
+  const res = pruneImages(msgs, { maxImages: 10, dump: fakeDump(calls) });
+  assert.ok(res);
+  assert.equal(res!.totalImages, 13);
+  assert.equal(countResultImages(res!.messages), 10);
+  assert.equal(res!.pruned.length, 3);
+  // 前一条的最旧 3 张被剪
+  assert.ok(res!.pruned.every((p) => p.msgIndex === 0));
+  assert.deepEqual(
+    res!.pruned.map((p) => p.blockIndex),
+    [0, 1, 2]
+  );
+  const c0 = (res!.messages[0] as Record<string, unknown[]>).content;
+  const c1 = (res!.messages[1] as Record<string, unknown[]>).content;
+  for (let i = 0; i < 3; i++) {
+    assert.equal((c0[i] as Record<string, string>).type, "text");
+  }
+  for (let i = 3; i < 12; i++) {
+    assert.equal((c0[i] as Record<string, string>).type, "image");
+  }
+  // 最新那张必须保留 (旧实现会把这张剪掉)
+  assert.equal((c1[0] as Record<string, string>).type, "image");
 });
