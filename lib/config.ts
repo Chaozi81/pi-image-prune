@@ -7,6 +7,7 @@ export type Src = "env" | "file" | "default";
 export interface Sources {
   enabled: Src;
   maxImages: Src;
+  maxImageBytes: Src;
   dumpDir: Src;
   retentionDays: Src;
 }
@@ -14,6 +15,8 @@ export interface Sources {
 export interface ResolvedConfig {
   enabled: boolean;
   maxImages: number;
+  /** 单次请求图片估算总体积预算(字节); `0` = 关闭体积规则 */
+  maxImageBytes: number;
   /** 绝对路径 */
   dumpDir: string;
   retentionDays: number;
@@ -24,6 +27,7 @@ export interface ResolvedConfig {
 export const DEFAULTS = {
   enabled: true,
   maxImages: 10,
+  maxImageBytes: 25165824,
   dumpDir: "~/.pi/agent/image-prune",
   retentionDays: 7,
 } as const;
@@ -68,12 +72,14 @@ export function resolveConfig(
   const sources: Sources = {
     enabled: "default",
     maxImages: "default",
+    maxImageBytes: "default",
     dumpDir: "default",
     retentionDays: "default",
   };
 
   let enabled: boolean = DEFAULTS.enabled;
   let maxImages: number = DEFAULTS.maxImages;
+  let maxImageBytes: number = DEFAULTS.maxImageBytes;
   let dumpDirRaw: string = DEFAULTS.dumpDir;
   let retentionDays: number = DEFAULTS.retentionDays;
 
@@ -111,6 +117,16 @@ export function resolveConfig(
       } else {
         warnings.push(
           `配置项 maxImages 非法(须为 >=1 的整数), 使用默认值 ${DEFAULTS.maxImages}`
+        );
+      }
+    }
+    if ("maxImageBytes" in fileCfg) {
+      if (isNonNegativeInt(fileCfg.maxImageBytes)) {
+        maxImageBytes = fileCfg.maxImageBytes;
+        sources.maxImageBytes = "file";
+      } else {
+        warnings.push(
+          `配置项 maxImageBytes 非法(须为 >=0 的整数), 使用默认值 ${DEFAULTS.maxImageBytes}`
         );
       }
     }
@@ -168,9 +184,23 @@ export function resolveConfig(
     sources.dumpDir = "env";
   }
 
+  const rawMaxBytes = env.PI_IMAGE_PRUNE_MAX_BYTES;
+  if (rawMaxBytes !== undefined && rawMaxBytes !== "") {
+    const t = rawMaxBytes.trim();
+    if (/^\d+$/.test(t) && Number.isSafeInteger(Number.parseInt(t, 10))) {
+      maxImageBytes = Number.parseInt(t, 10);
+      sources.maxImageBytes = "env";
+    } else {
+      warnings.push(
+        `环境变量 PI_IMAGE_PRUNE_MAX_BYTES 非法(须为 >=0 的整数): ${rawMaxBytes}(忽略)`
+      );
+    }
+  }
+
   return {
     enabled,
     maxImages,
+    maxImageBytes,
     dumpDir: expandPath(dumpDirRaw, home),
     retentionDays,
     sources,

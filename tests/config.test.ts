@@ -17,35 +17,40 @@ test("无文件无 env → 全默认 + sources 全 default", () => {
   const cfg = resolveConfig({ env: {}, home: HOME, readFile: missing });
   assert.equal(cfg.enabled, true);
   assert.equal(cfg.maxImages, 10);
+  assert.equal(cfg.maxImageBytes, 25165824);
   assert.equal(cfg.dumpDir, `${HOME}/.pi/agent/image-prune`);
   assert.equal(cfg.retentionDays, 7);
   assert.deepEqual(cfg.sources, {
     enabled: "default",
     maxImages: "default",
+    maxImageBytes: "default",
     dumpDir: "default",
     retentionDays: "default",
   });
   assert.equal(cfg.warnings.length, 0);
 });
 
-test("文件四键生效", () => {
+test("文件五键生效", () => {
   const cfg = resolveConfig({
     env: {},
     home: HOME,
     readFile: fileWith({
       enabled: false,
       maxImages: 5,
+      maxImageBytes: 8388608,
       dumpDir: "~/dumps",
       retentionDays: 3,
     }),
   });
   assert.equal(cfg.enabled, false);
   assert.equal(cfg.maxImages, 5);
+  assert.equal(cfg.maxImageBytes, 8388608);
   assert.equal(cfg.dumpDir, `${HOME}/dumps`);
   assert.equal(cfg.retentionDays, 3);
   assert.deepEqual(cfg.sources, {
     enabled: "file",
     maxImages: "file",
+    maxImageBytes: "file",
     dumpDir: "file",
     retentionDays: "file",
   });
@@ -155,10 +160,69 @@ test("非法 JSON → 全默认 + 1 条 warning", () => {
   assert.deepEqual(cfg.sources, {
     enabled: "default",
     maxImages: "default",
+    maxImageBytes: "default",
     dumpDir: "default",
     retentionDays: "default",
   });
   assert.equal(cfg.warnings.length, 1);
+});
+
+test("maxImageBytes: env 覆盖 file", () => {
+  const cfg = resolveConfig({
+    env: { PI_IMAGE_PRUNE_MAX_BYTES: "1048576" },
+    home: HOME,
+    readFile: fileWith({ maxImageBytes: 8388608 }),
+  });
+  assert.equal(cfg.maxImageBytes, 1048576);
+  assert.equal(cfg.sources.maxImageBytes, "env");
+});
+
+test("maxImageBytes 文件非法(-1/1.5/\"x\") → 回落默认 + warning", () => {
+  for (const bad of [-1, 1.5, "x"]) {
+    const cfg = resolveConfig({
+      env: {},
+      home: HOME,
+      readFile: fileWith({ maxImageBytes: bad }),
+    });
+    assert.equal(cfg.maxImageBytes, DEFAULTS.maxImageBytes, `bad=${JSON.stringify(bad)}`);
+    assert.equal(cfg.sources.maxImageBytes, "default", `bad=${JSON.stringify(bad)}`);
+    assert.ok(cfg.warnings.length >= 1, `bad=${JSON.stringify(bad)}`);
+  }
+});
+
+test("maxImageBytes 0 合法(关闭体积规则)", () => {
+  const cfg = resolveConfig({
+    env: {},
+    home: HOME,
+    readFile: fileWith({ maxImageBytes: 0 }),
+  });
+  assert.equal(cfg.maxImageBytes, 0);
+  assert.equal(cfg.sources.maxImageBytes, "file");
+  assert.equal(cfg.warnings.length, 0);
+});
+
+test("PI_IMAGE_PRUNE_MAX_BYTES 非法(abc/-1/1.5/空串外) → 忽略 + warning", () => {
+  for (const bad of ["abc", "-1", "1.5", "1MiB"]) {
+    const cfg = resolveConfig({
+      env: { PI_IMAGE_PRUNE_MAX_BYTES: bad },
+      home: HOME,
+      readFile: missing,
+    });
+    assert.equal(cfg.maxImageBytes, DEFAULTS.maxImageBytes, `bad=${bad}`);
+    assert.equal(cfg.sources.maxImageBytes, "default", `bad=${bad}`);
+    assert.ok(cfg.warnings.length >= 1, `bad=${bad}`);
+  }
+});
+
+test("PI_IMAGE_PRUNE_MAX_BYTES=0 合法(env 来源)", () => {
+  const cfg = resolveConfig({
+    env: { PI_IMAGE_PRUNE_MAX_BYTES: "0" },
+    home: HOME,
+    readFile: missing,
+  });
+  assert.equal(cfg.maxImageBytes, 0);
+  assert.equal(cfg.sources.maxImageBytes, "env");
+  assert.equal(cfg.warnings.length, 0);
 });
 
 test("dumpDir 的 ~ 展开", () => {

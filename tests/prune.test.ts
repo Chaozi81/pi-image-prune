@@ -1,6 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { pruneImages, placeholderText } from "../lib/prune.ts";
+import {
+  pruneImages,
+  placeholderText,
+  bytesPlaceholderText,
+  estimateBytes,
+  formatMiB,
+} from "../lib/prune.ts";
 import { hashImage } from "../lib/dump.ts";
 
 const img = (data: string, mimeType = "image/png") =>
@@ -30,11 +36,11 @@ test("恰好等于上限 → undefined(同一引用)", () => {
   const msgs = [user([img("a"), text("x")])];
   const msgs10 = [user(Array.from({ length: 10 }, (_, i) => img(`i${i}`)))];
   assert.equal(
-    pruneImages(msgs, { maxImages: 10, dump: fakeDump([]) }),
+    pruneImages(msgs, { maxImages: 10, maxImageBytes: 0, dump: fakeDump([]) }),
     undefined
   );
   assert.equal(
-    pruneImages(msgs10, { maxImages: 10, dump: fakeDump([]) }),
+    pruneImages(msgs10, { maxImages: 10, maxImageBytes: 0, dump: fakeDump([]) }),
     undefined
   );
 });
@@ -46,7 +52,7 @@ test("超 1 张 → 只剪最旧, 消息数/块数/顺序不变", () => {
     user([text("t2"), img("d")]),
     user([img("e"), text("t3")]),
   ];
-  const res = pruneImages(msgs, { maxImages: 4, dump: fakeDump(calls) });
+  const res = pruneImages(msgs, { maxImages: 4, maxImageBytes: 0, dump: fakeDump(calls) });
   assert.ok(res);
   assert.equal(res!.messages.length, 3);
   // msg0: 4 blocks, msg1: 2 blocks, msg2: 2 blocks
@@ -80,7 +86,7 @@ test("跨消息保留最新 N 张", () => {
     user([img("old1"), img("old2")]),
     user([img("new1"), img("new2")]),
   ];
-  const res = pruneImages(msgs, { maxImages: 2, dump: fakeDump(calls) });
+  const res = pruneImages(msgs, { maxImages: 2, maxImageBytes: 0, dump: fakeDump(calls) });
   assert.ok(res);
   const c0 = (res!.messages[0] as Record<string, unknown[]>).content;
   const c1 = (res!.messages[1] as Record<string, unknown[]>).content;
@@ -98,7 +104,7 @@ test("不修改入参(快照对比)", () => {
     user([text("y")]),
   ];
   const snapshot = structuredClone(msgs);
-  pruneImages(msgs, { maxImages: 1, dump: fakeDump(calls) });
+  pruneImages(msgs, { maxImages: 1, maxImageBytes: 0, dump: fakeDump(calls) });
   assert.deepEqual(msgs, snapshot);
 });
 
@@ -109,7 +115,7 @@ test("未改动的消息按引用复用", () => {
     user([text("unchanged")]),
     user([img("c")]),
   ];
-  const res = pruneImages(msgs, { maxImages: 2, dump: fakeDump(calls) });
+  const res = pruneImages(msgs, { maxImages: 2, maxImageBytes: 0, dump: fakeDump(calls) });
   assert.ok(res);
   // msg0 被改动(剪了 a), msg1 无图不需改, msg2 保留 c 未超限不需改
   assert.notEqual(res!.messages[0], msgs[0]);
@@ -120,9 +126,9 @@ test("未改动的消息按引用复用", () => {
 test("幂等: 对结果再跑一次 → undefined", () => {
   const calls: string[] = [];
   const msgs = [user([img("a"), img("b"), img("c")])];
-  const res = pruneImages(msgs, { maxImages: 2, dump: fakeDump(calls) });
+  const res = pruneImages(msgs, { maxImages: 2, maxImageBytes: 0, dump: fakeDump(calls) });
   assert.ok(res);
-  const second = pruneImages(res!.messages, { maxImages: 2, dump: fakeDump(calls) });
+  const second = pruneImages(res!.messages, { maxImages: 2, maxImageBytes: 0, dump: fakeDump(calls) });
   assert.equal(second, undefined);
 });
 
@@ -130,7 +136,7 @@ test("单条消息内 12 张(上限 10) → 留该条最后 10 张, overLimitInS
   const calls: string[] = [];
   const imgs = Array.from({ length: 12 }, (_, i) => img(`i${i}`));
   const msgs = [user(imgs)];
-  const res = pruneImages(msgs, { maxImages: 10, dump: fakeDump(calls) });
+  const res = pruneImages(msgs, { maxImages: 10, maxImageBytes: 0, dump: fakeDump(calls) });
   assert.ok(res);
   assert.equal(res!.totalImages, 12);
   assert.equal(res!.overLimitInSingleMessage, true);
@@ -151,7 +157,7 @@ test("落盘抛错 → 仍剪, 占位含 '落盘失败', pruned[i].path === null
     throw new Error("EACCES");
   };
   const msgs = [user([img("a"), img("b")])];
-  const res = pruneImages(msgs, { maxImages: 1, dump });
+  const res = pruneImages(msgs, { maxImages: 1, maxImageBytes: 0, dump });
   assert.ok(res);
   assert.equal(res!.pruned.length, 1);
   assert.equal(res!.pruned[0].path, null);
@@ -168,7 +174,7 @@ test("工具结果消息里的图同样被剪", () => {
     { role: "tool", content: [img("tool-img"), text("res")] },
     user([img("user-img")]),
   ];
-  const res = pruneImages(msgs, { maxImages: 1, dump: fakeDump(calls) });
+  const res = pruneImages(msgs, { maxImages: 1, maxImageBytes: 0, dump: fakeDump(calls) });
   assert.ok(res);
   assert.equal(res!.pruned.length, 1);
   assert.equal(res!.pruned[0].msgIndex, 0); // tool msg 的 img 被剪
@@ -178,7 +184,7 @@ test("content 是字符串的消息原样复用", () => {
   const calls: string[] = [];
   const plain = { role: "user", content: "plain" };
   const msgs = [plain, user([img("a"), img("b")])];
-  const res = pruneImages(msgs, { maxImages: 1, dump: fakeDump(calls) });
+  const res = pruneImages(msgs, { maxImages: 1, maxImageBytes: 0, dump: fakeDump(calls) });
   assert.ok(res);
   assert.equal(res!.messages[0], plain);
 });
@@ -191,7 +197,7 @@ test("dump 只对被剪的图调用", () => {
     user([img("c")]),
     user([img("d")]),
   ];
-  pruneImages(msgs, { maxImages: 2, dump: fakeDump(calls) });
+  pruneImages(msgs, { maxImages: 2, maxImageBytes: 0, dump: fakeDump(calls) });
   // 总共 4 张, max=2, 剪全局最旧的 2 张: a 和 b
   assert.equal(calls.length, 2);
   assert.ok(calls.includes(hashImage("a")));
@@ -204,7 +210,7 @@ test("多条消息同时超上限 → 仍然全局剪最旧, 剪后总数 === ma
     user([img("a"), img("b"), img("c")]), // 3 张, max=2
     user([img("d"), img("e"), img("f")]), // 3 张, max=2
   ];
-  const res = pruneImages(msgs, { maxImages: 2, dump: fakeDump(calls) });
+  const res = pruneImages(msgs, { maxImages: 2, maxImageBytes: 0, dump: fakeDump(calls) });
   assert.ok(res);
   assert.equal(res!.totalImages, 6);
   assert.equal(res!.overLimitInSingleMessage, true);
@@ -247,12 +253,13 @@ test("REGRESSION 两条消息各 12 张(上限 10) → 剪后恰好 10 张, prun
     user(Array.from({ length: 12 }, (_, i) => img(`a${i}`))),
     user(Array.from({ length: 12 }, (_, i) => img(`b${i}`))),
   ];
-  const res = pruneImages(msgs, { maxImages: 10, dump: fakeDump(calls) });
+  const res = pruneImages(msgs, { maxImages: 10, maxImageBytes: 0, dump: fakeDump(calls) });
   assert.ok(res);
   assert.equal(res!.totalImages, 24);
   // 硬保证: 剪后图片数 === maxImages (旧实现是 20)
   assert.equal(countResultImages(res!.messages), 10);
   assert.equal(res!.pruned.length, 14);
+  assert.equal(res!.keptImages, 10);
   // 剪掉的正是全局最旧的 14 张 (msg0 全部 12 张 + msg1 最旧 2 张)
   assert.equal(res!.pruned[0].msgIndex, 0);
   assert.equal(res!.pruned[13].msgIndex, 1);
@@ -270,7 +277,7 @@ test("语义变更: 一条 12 张 + 后面 1 张新的(上限 10) → 保留最�
     user(Array.from({ length: 12 }, (_, i) => img(`old${i}`))),
     user([img("newest")]),
   ];
-  const res = pruneImages(msgs, { maxImages: 10, dump: fakeDump(calls) });
+  const res = pruneImages(msgs, { maxImages: 10, maxImageBytes: 0, dump: fakeDump(calls) });
   assert.ok(res);
   assert.equal(res!.totalImages, 13);
   assert.equal(countResultImages(res!.messages), 10);
@@ -291,4 +298,138 @@ test("语义变更: 一条 12 张 + 后面 1 张新的(上限 10) → 保留最�
   }
   // 最新那张必须保留 (旧实现会把这张剪掉)
   assert.equal((c1[0] as Record<string, string>).type, "image");
+});
+
+// ---- 体积预算规则 ----
+
+test("formatMiB 边界: 最多 1 位小数, 去掉多余 .0", () => {
+  assert.equal(formatMiB(25165824), "24 MiB");
+  assert.equal(formatMiB(524288), "0.5 MiB");
+  assert.equal(formatMiB(2621440), "2.5 MiB");
+  assert.equal(formatMiB(1048576), "1 MiB");
+  assert.equal(formatMiB(1572864), "1.5 MiB");
+  assert.equal(formatMiB(10485760), "10 MiB");
+  assert.equal(formatMiB(0), "0 MiB");
+  assert.equal(formatMiB(1), "0 MiB");
+});
+
+test("estimateBytes = ceil(base64 长度 × 3/4)", () => {
+  assert.equal(estimateBytes(""), 0);
+  assert.equal(estimateBytes(undefined), 0);
+  assert.equal(estimateBytes("aaaa"), 3);
+  assert.equal(estimateBytes("aaaaa"), 4); // ceil(15/4) = 4
+});
+
+test("bytesPlaceholderText 精确格式(成功/失败)", () => {
+  assert.equal(
+    bytesPlaceholderText(25165824, "/dump/a.png"),
+    "[早期图片已省略 · 超出单次请求体积预算 24 MiB · 原图: /dump/a.png]"
+  );
+  assert.equal(
+    bytesPlaceholderText(524288, null, "EACCES"),
+    "[早期图片已省略 · 超出单次请求体积预算 0.5 MiB · 落盘失败: EACCES]"
+  );
+});
+
+test("张数不超但体积超 → 按体积剪到 <= 预算, 至少留 1 张, reason 全为 bytes", () => {
+  const calls: string[] = [];
+  // 3 张, data 各 4 字符 → 各 3 字节, 共 9 字节; 预算 6 字节 → 剪 1 张
+  const msgs = [user([img("a".repeat(4)), img("b".repeat(4)), img("c".repeat(4))])];
+  const res = pruneImages(msgs, { maxImages: 10, maxImageBytes: 6, dump: fakeDump(calls) });
+  assert.ok(res);
+  assert.equal(res!.totalImages, 3);
+  assert.equal(res!.totalBytes, 9);
+  assert.equal(res!.keptImages, 2);
+  assert.equal(res!.keptBytes, 6);
+  assert.equal(res!.singleImageOverBudget, false);
+  assert.equal(res!.overLimitInSingleMessage, false);
+  assert.equal(res!.pruned.length, 1);
+  assert.equal(res!.pruned[0].reason, "bytes");
+  assert.equal(res!.pruned[0].blockIndex, 0); // 最旧的一张
+  const content = (res!.messages[0] as Record<string, unknown[]>).content;
+  assert.ok((content[0] as Record<string, string>).text.includes("超出单次请求体积预算"));
+  assert.equal((content[1] as Record<string, string>).type, "image");
+  assert.equal((content[2] as Record<string, string>).type, "image");
+});
+
+test("预算很小 → 剪到只剩 1 张且 singleImageOverBudget === true", () => {
+  const calls: string[] = [];
+  // 2 张, data 各 400 字符 → 各 300 字节; 预算 1 字节 → 只能剪到 1 张
+  const msgs = [user([img("a".repeat(400)), img("b".repeat(400))])];
+  const res = pruneImages(msgs, { maxImages: 10, maxImageBytes: 1, dump: fakeDump(calls) });
+  assert.ok(res);
+  assert.equal(res!.totalBytes, 600);
+  assert.equal(res!.keptImages, 1);
+  assert.equal(res!.keptBytes, 300);
+  assert.equal(res!.singleImageOverBudget, true);
+  assert.equal(res!.pruned.length, 1);
+  assert.equal(res!.pruned[0].reason, "bytes");
+});
+
+test("只有 1 张且自身超预算 → 无可剪, 仍返回结果并标记 singleImageOverBudget", () => {
+  const msgs = [user([img("a".repeat(400))])]; // 300 字节
+  const res = pruneImages(msgs, { maxImages: 10, maxImageBytes: 1, dump: fakeDump([]) });
+  assert.ok(res);
+  assert.equal(res!.pruned.length, 0);
+  assert.equal(res!.keptImages, 1);
+  assert.equal(res!.keptBytes, 300);
+  assert.equal(res!.singleImageOverBudget, true);
+  assert.equal(countResultImages(res!.messages), 1);
+  // 无改动 → 消息按引用复用
+  assert.equal(res!.messages[0], msgs[0]);
+});
+
+test("maxImageBytes=0 → 体积规则完全不生效", () => {
+  const calls: string[] = [];
+  const msgs = [user([img("a".repeat(4000)), img("b".repeat(4000))])]; // 各 3000 字节
+  // 张数不超 + 体积关闭 → undefined(即便体积很大)
+  assert.equal(
+    pruneImages(msgs, { maxImages: 10, maxImageBytes: 0, dump: fakeDump(calls) }),
+    undefined
+  );
+  // 张数超时只按张数剪: reason 只有 count, 不因体积多剪
+  const res = pruneImages(msgs, { maxImages: 1, maxImageBytes: 0, dump: fakeDump(calls) });
+  assert.ok(res);
+  assert.equal(res!.pruned.length, 1);
+  assert.equal(res!.pruned[0].reason, "count");
+  assert.equal(res!.keptImages, 1);
+  assert.equal(res!.keptBytes, 3000); // 仍可能超预算, 但规则关闭
+  assert.equal(res!.singleImageOverBudget, false);
+});
+
+test("张数与体积同时超 → 两种 reason 都出现, 且最旧的先剪(count 在 bytes 之前)", () => {
+  const calls: string[] = [];
+  // 5 张, 各 300 字节 (data 长 400); maxImages=3 → countExcess=2
+  // 剩 3 张 = 900 字节 > 预算 600 → 再剪 1 张 (bytes)
+  const msgs = [user([0, 1, 2, 3, 4].map((i) => img(String(i).repeat(400))))];
+  const res = pruneImages(msgs, { maxImages: 3, maxImageBytes: 600, dump: fakeDump(calls) });
+  assert.ok(res);
+  assert.equal(res!.totalImages, 5);
+  assert.equal(res!.totalBytes, 1500);
+  assert.equal(res!.pruned.length, 3);
+  assert.deepEqual(
+    res!.pruned.map((p) => p.reason),
+    ["count", "count", "bytes"]
+  );
+  assert.deepEqual(
+    res!.pruned.map((p) => p.blockIndex),
+    [0, 1, 2]
+  );
+  assert.equal(res!.keptImages, 2);
+  assert.equal(res!.keptBytes, 600);
+});
+
+test("体积规则落盘抛错 → 仍剪, 占位含 '落盘失败', reason 仍为 bytes", () => {
+  const dump = () => {
+    throw new Error("EACCES");
+  };
+  const msgs = [user([img("a".repeat(4)), img("b".repeat(4)), img("c".repeat(4))])];
+  const res = pruneImages(msgs, { maxImages: 10, maxImageBytes: 6, dump });
+  assert.ok(res);
+  assert.equal(res!.pruned[0].reason, "bytes");
+  assert.equal(res!.pruned[0].path, null);
+  assert.equal(res!.pruned[0].error, "EACCES");
+  const content = (res!.messages[0] as Record<string, unknown[]>).content;
+  assert.ok((content[0] as Record<string, string>).text.includes("落盘失败: EACCES"));
+  assert.ok((content[0] as Record<string, string>).text.includes("超出单次请求体积预算"));
 });
